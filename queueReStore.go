@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"encoding/json"
+	"gopkg/yaml"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,12 +21,15 @@ import (
 // application version
 const AppVersion = "1.0.0"
 
-const playerUrl        = "http://localhost:3689/api/player"
-const actPosTargetPath = "/media/.queueStoredPos"
-const queueUrl         = "http://localhost:3689/api/queue"
-const plsTargetPath    = "/media/Playlists/_queueReStore.m3u"
-const otUid = 997 // uid of owntone
-const otGid = 29  // gid of audio
+var Config config
+// queue item structure
+type config struct {
+	APIUrl     string `yaml:"otAPIUrl"`
+	OTUid      int    `yaml:"otUid"`
+	OTGid      int    `yaml:"otGid"`
+	ActPosTrgt string `yaml:"actPosTargetPath"`
+	PlsTarget  string `yaml:"plsTargetPath"`
+}
 
 // queue item structure
 type queueItem struct {
@@ -56,6 +60,20 @@ type playerInfo struct {
 	Position       int    
 	TrackId        int    
 	Uri            string ""
+}
+
+func readConfig() {
+	configData, err := ioutil.ReadFile("/etc/queueReStore.yml")
+	if err != nil {
+		fmt.Println("Can not read config-file!")
+		log.Fatalln(err)
+	}
+
+	// parse []byte directly to the global variable 'Config'
+	if err := yaml.Unmarshal(configData, &Config); err != nil {
+		fmt.Println("Can not unmarshal config YAML!")
+		log.Fatalln(err)
+	}
 }
 
 // make a GET request from source url and load data
@@ -114,11 +132,11 @@ func writePlsFile(queueItems []queueItem) (bool, error) {
 	plsContent = strings.TrimSuffix(plsContent, "\n")
 
 	// write queue-content to file
-	if err := os.WriteFile(plsTargetPath, []byte(plsContent), 0644); err != nil {
+	if err := os.WriteFile(Config.PlsTarget, []byte(plsContent), 0644); err != nil {
 		return false, errors.New("Can not write m3u-file!")
 	}
 	// set ownership to owntone:audio
-	if err := os.Chown(plsTargetPath, otUid, otGid); err != nil {
+	if err := os.Chown(Config.PlsTarget, Config.OTUid, Config.OTGid); err != nil {
 		return false, errors.New("Can not set ownership of m3u-file!")
 	}
 
@@ -152,13 +170,14 @@ func writeActPosFile(player *playerInfo) (bool, error) {
 	actPosFileString, _ := json.MarshalIndent(player, "", " ")
  
 	// write player info content to file
-	if err := ioutil.WriteFile(actPosTargetPath, actPosFileString, 0644); err != nil {
+	if err := ioutil.WriteFile(Config.ActPosTrgt, actPosFileString, 0644); err != nil {
+		fmt.Println("Can not write actPos-file!")
+		fmt.Println(Config.APIUrl)
 		log.Fatalln(err)
-		return false, errors.New("Can not write actPos-file!")
 	}
 
 	// set ownership to owntone:audio
-	if err := os.Chown(actPosTargetPath, otUid, otGid); err != nil {
+	if err := os.Chown(Config.ActPosTrgt, Config.OTUid, Config.OTGid); err != nil {
 		return false, errors.New("Can not set ownership of actPos-file!")
 	}
 
@@ -167,7 +186,7 @@ func writeActPosFile(player *playerInfo) (bool, error) {
 
 func readActPosFile() (*playerInfo, error) {
 	// read actPos file
-	actPosFile, err := ioutil.ReadFile(actPosTargetPath)
+	actPosFile, err := ioutil.ReadFile(Config.ActPosTrgt)
 	if err != nil {
 		return nil, errors.New("Can not read actPost-file!")
 	}
@@ -199,9 +218,12 @@ func main() {
 		log.Fatalln("-mode must be set to [store|restore]!")
 	}
 
+	// read config from file '/etc/queueReStore.yml'
+	readConfig()
+
 	if (mode == "store") {
 		//data, err := makeRequest(flag.Args()[len(flag.Args())-1])
-		data, err := makeRequest(queueUrl)
+		data, err := makeRequest(Config.APIUrl+"/queue")
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -217,14 +239,14 @@ func main() {
 		}
 
 		if (success == true) {
-			fmt.Println(fmt.Sprintf("ownTone-queue successfully written to:\n    '%s'", plsTargetPath))
+			fmt.Println(fmt.Sprintf("ownTone-queue successfully written to:\n    '%s'", Config.PlsTarget))
 		} else {
 			fmt.Println("Something went wrong!\n")
 			os.Exit(1)
 		}
 
 		// get actual player info
-		data, err = makeRequest(playerUrl)
+		data, err = makeRequest(Config.APIUrl+"/player")
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -242,7 +264,7 @@ func main() {
 		}
 
 		if (success == true) {
-			fmt.Println(fmt.Sprintf("ownTones actual queue position stored to:\n    '%s'\n", actPosTargetPath))
+			fmt.Println(fmt.Sprintf("ownTones actual queue position stored to:\n    '%s'\n", Config.ActPosTrgt))
 			fmt.Println("Success!\n")
 		} else {
 			fmt.Println("Something went wrong!")
@@ -273,13 +295,13 @@ func main() {
 		fmt.Printf("%+v\n", player)
 
 		// delete plsTargetPath file
-		if _, err := os.Stat(plsTargetPath); err == nil {
-			if err := os.Remove(plsTargetPath); err != nil {
-				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", plsTargetPath))
+		if _, err := os.Stat(Config.PlsTarget); err == nil {
+			if err := os.Remove(Config.PlsTarget); err != nil {
+				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", Config.PlsTarget))
 			}
 		} else if errors.Is(err, os.ErrNotExist) {
 		  // path/to/whatever does *not* exist
-			fmt.Println(fmt.Sprintf("Playlist file '%s' does not exists! Continuing anyway...", plsTargetPath))
+			fmt.Println(fmt.Sprintf("Playlist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
 		}
 
 		fmt.Println("Not definde yet!\n")
