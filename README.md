@@ -9,4 +9,3 @@ Usage of ./queueReStore:
         [store|restore] queue
   -version
         show version and exit
-```
