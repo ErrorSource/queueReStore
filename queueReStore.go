@@ -32,6 +32,7 @@ type config struct {
 	OTGid      int    `yaml:"otGid"`
 	ActPosTrgt string `yaml:"actPosTargetPath"`
 	PlsTarget  string `yaml:"plsTargetPath"`
+	SPPipePath string `yaml:"shrPrtPipePath"`
 }
 
 // queue item structure
@@ -138,6 +139,10 @@ func writePlsFile(queueItems []queueItem) (bool, error) {
 
 	// tracks
 	for _, item := range queueItems {
+		// abort immediately, if FilePath is shairport-sync pipe path
+		if (item.FilePath == Config.SPPipePath) {
+			return false, errors.New("shairport-sync Playlist detected! Won't store! Aborting...")
+		}
 		// track info
 		plsContent = plsContent + fmt.Sprintf("#EXTINF:%d, %s - %s\n", item.TrackId, item.Artist, item.Title)
 		// track path
