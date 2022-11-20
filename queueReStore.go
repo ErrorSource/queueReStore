@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	// "os/exec"
 )
@@ -20,6 +21,8 @@ import (
 
 // application version
 const AppVersion = "1.0.0"
+
+var quiet bool
 
 var Config config
 // queue item structure
@@ -60,6 +63,18 @@ type playerInfo struct {
 	Position       int    
 	TrackId        int    
 	Uri            string ""
+}
+
+// playlist structure
+type plsItem struct {
+	ItemId   int    `json:"id"`
+	Name     string `json:"name"`
+	Uri      string `json:"uri"`
+}
+
+type plsObj struct {
+	Total  int `json:"total"`
+	Items  []plsItem `json:"items"`
 }
 
 func readConfig() {
@@ -200,13 +215,64 @@ func readActPosFile() (*playerInfo, error) {
 	return &jsonObj, nil
 }
 
+// convert downloaded data bytes (json) to list of playlist items
+func getOnwPlaylistUri(jsonData []byte) (string, error) {
+	// parse []byte to the go struct pointer
+	var jsonObj plsObj
+	if err := json.Unmarshal(jsonData, &jsonObj); err != nil {
+		return "", errors.New("Can not unmarshal JSON!")
+	}
+	
+	var ownPlsUri string
+	if (jsonObj.Total > 0) {
+		for _, item := range jsonObj.Items {
+			// search for playlist with name '_queueReStore'
+			if (item.Name == "_queueReStore") {
+				ownPlsUri = item.Uri
+			}
+		}
+	}
+
+	if (ownPlsUri == "") {
+		return "", errors.New("Queue '_queueReStore.m3u' not found in data!")
+	}
+
+	return ownPlsUri, nil
+}
+
+func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, shfflMode bool) (bool, error) {
+	// append params in URL as well! the url.Values are not in charge here, but for the record...
+	var loadReq string = Config.APIUrl+"/queue/items/add?uris="+trgtPlsUri+"&clear=true&shuffle="+fmt.Sprintf("%t", shfflMode)+"&playback=start&playback_from_position="+fmt.Sprintf("%v", (trgtPos - 1))
+	// this has to be a POST-request!
+	postData := url.Values{
+		"uris":                   { trgtPlsUri },
+		"clear":                  { "true" },
+		"shuffle":                { fmt.Sprintf("%t", shfflMode) },
+		"playback":               { "start" },
+		"playback_from_position": { fmt.Sprintf("%v", (trgtPos - 1)) },
+	}
+	if _, err := http.PostForm(loadReq, postData); err != nil {
+		return false, errors.New("Can not load stored playlist!")
+	}
+
+	// immediately send pause command
+	pauseReq, _ := http.NewRequest("PUT", Config.APIUrl+"/player/pause", nil)
+	client := &http.Client{}
+	if _, err := client.Do(pauseReq); err != nil {
+		fmt.Println("Can send 'pause' after stored playlist loaded! Continuing anyway...")
+	}
+
+	return true, nil
+}
+
 
 func main() {
 	version := flag.Bool("version", false, "show version and exit")
 	var mode string
 	flag.StringVar(&mode, "mode", "", "[store|restore] queue")
+	flag.BoolVar(&quiet, "quiet", false, "no output to stdout")
 	flag.Parse()
-
+	
 	if *version {
 		fmt.Println(AppVersion)
 		os.Exit(0)
@@ -239,7 +305,9 @@ func main() {
 		}
 
 		if (success == true) {
-			fmt.Println(fmt.Sprintf("ownTone-queue successfully written to:\n    '%s'", Config.PlsTarget))
+			if (quiet == false) {
+				fmt.Println(fmt.Sprintf("ownTone-queue successfully written to:\n    '%s'", Config.PlsTarget))
+			}
 		} else {
 			fmt.Println("Something went wrong!\n")
 			os.Exit(1)
@@ -264,35 +332,38 @@ func main() {
 		}
 
 		if (success == true) {
-			fmt.Println(fmt.Sprintf("ownTones actual queue position stored to:\n    '%s'\n", Config.ActPosTrgt))
-			fmt.Println("Success!\n")
+			if (quiet == false) {
+				fmt.Println(fmt.Sprintf("ownTones actual queue position stored to:\n    '%s'\n", Config.ActPosTrgt))
+				fmt.Println("Success!\n")
+			}
 		} else {
 			fmt.Println("Something went wrong!")
 			os.Exit(1)
 		}
-
-		// call /usr/local/bin/queuePosStore
-		// if err := exec.Command("/usr/local/bin/queuePosStore").Start(); err != nil {
-		// 	errors.New("Can not execute '/usr/local/bin/queuePosStore'!")
-		// }
 	}
 
 	if (mode == "restore") {
-		// curl -X GET "http://localhost:3689/api/library/playlists" → json-Objekt
-		// { "id": 141, "name": "_beforeShairport", "path": "\/media\/Playlists\/_beforeShairport.m3u"...
-		// id extrahieren
-		// curl -X POST "http://localhost:3689/api/queue/items/add?uris=library:playlist:${playlistID}&clear=true&shuffle=false"
-		// curl -X POST "http://localhost:3689/api/queue/items/add?uris=library:playlist:17&clear=true&shuffle=false&playback=start&playback_from_position=10"
-		// if ItemProgressMS kleiner 5sek → bei 0 anfangen; sonst -3sec = -3000ms starten und dann stoppen
-		// auf Zeit-Position springen
-		// curl -X PUT "http://localhost:3689/api/player/seek?position_ms=20000"
-
 		// read
 		player, err := readActPosFile()
 		if err != nil {
 			log.Fatalln(err)
 		}
-		fmt.Printf("%+v\n", player)
+
+		data, err := makeRequest(Config.APIUrl+"/library/playlists")
+		if err != nil {
+			log.Fatalln(err)
+		}
+		
+		ownPlsUri, err := getOnwPlaylistUri(data)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		// store player info to .queue.storedPos file
+		success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ShuffleMode)
+		if err != nil {
+			log.Fatalln(err)
+		}
 
 		// delete plsTargetPath file
 		if _, err := os.Stat(Config.PlsTarget); err == nil {
@@ -300,11 +371,28 @@ func main() {
 				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", Config.PlsTarget))
 			}
 		} else if errors.Is(err, os.ErrNotExist) {
-		  // path/to/whatever does *not* exist
+			// path does *not* exist
 			fmt.Println(fmt.Sprintf("Playlist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
 		}
 
-		fmt.Println("Not definde yet!\n")
-		os.Exit(1)
+		// delete actPosTargetPath file
+		if _, err := os.Stat(Config.ActPosTrgt); err == nil {
+			if err := os.Remove(Config.ActPosTrgt); err != nil {
+				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", Config.ActPosTrgt))
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			// path does *not* exist
+			fmt.Println(fmt.Sprintf("Actual position file '%s' does not exists! Continuing anyway...", Config.ActPosTrgt))
+		}
+
+		if (success == true) {
+			if (quiet == false) {
+				fmt.Println(fmt.Sprintf("Restored playlist and jumped to track num: '%s'\n", fmt.Sprintf("%v", player.Position)))
+				fmt.Println("Success!\n")
+			}
+		} else {
+			fmt.Println("Something went wrong!")
+			os.Exit(1)
+		}
 	}
 }
