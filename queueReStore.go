@@ -39,13 +39,14 @@ type config struct {
 
 // queue item structure
 type queueItem struct {
-	ItemId   int    `json:"id"`
-	Position int    `json:"position"`
-	TrackId  int    `json:"track_id"`
-	Artist   string `json:"artist"`
-	Title    string `json:"title"`
-	FilePath string `json:"path"`
-	Uri      string `json:"uri"`
+	ItemId    int    `json:"id"`
+	Position  int    `json:"position"`
+	TrackId   int    `json:"track_id"`
+	Artist    string `json:"artist"`
+	Title     string `json:"title"`
+	MediaKind string `json:"media_kind"`
+	FilePath  string `json:"path"`
+	Uri       string `json:"uri"`
 }
 type queueObj struct {
 	Version  int `json:"version"`
@@ -65,6 +66,7 @@ type playerInfo struct {
 	ItemProgressMS int    `json:"item_progress_ms"`
 	Position       int    
 	TrackId        int    
+	MediaKind      string
 	Uri            string ""
 }
 
@@ -219,6 +221,7 @@ func convertToPlayerStruct(jsonData []byte, queueItems []queueItem) (*playerInfo
 			// add missing data to player info
 			jsonObj.Position = queueItems[idQElem].Position + 1
 			jsonObj.TrackId = queueItems[idQElem].TrackId
+			jsonObj.MediaKind = queueItems[idQElem].MediaKind
 			jsonObj.Uri = queueItems[idQElem].Uri
 			break
 		}
@@ -284,7 +287,7 @@ func getOwnPlaylistUri(jsonData []byte) (string, error) {
 	return ownPlsUri, nil
 }
 
-func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, shfflMode bool) (bool, error) {
+func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, seekPos int, shfflMode bool, mediaKind string) (bool, error) {
 	// append params in URL as well! the url.Values are not in charge here, but for the record...
 	var loadReq string = Config.APIUrl+"/queue/items/add?uris="+trgtPlsUri+"&clear=true&shuffle="+fmt.Sprintf("%t", shfflMode)+"&playback=start&playback_from_position="+fmt.Sprintf("%v", (trgtPos - 1))
 	// this has to be a POST-request!
@@ -299,6 +302,15 @@ func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, shfflMode bool) (boo
 		return false, errors.New("Cannot let owntone to load stored playlist (via POST)!")
 	}
 
+	// Actual track is an audiobook? → jump to stored seek-positon (if greater 1sec = 1000ms)
+	if (mediaKind == "audiobook" && seekPos > 1000) {
+		pauseReq, _ := http.NewRequest("PUT", Config.APIUrl+"/player/seek?position_ms="+fmt.Sprintf("%v", seekPos), nil)
+		client := &http.Client{}
+		if _, err := client.Do(pauseReq); err != nil {
+			outputMsg("WARNING: Cannot send 'play to seek-position' command to owntone after stored playlist (audiobook) loaded! Continuing anyway...")
+		}
+	}
+	//curl -X PUT "http://localhost:3689/api/player/seek?position_ms=2000"
 	// immediately send pause command
 	pauseReq, _ := http.NewRequest("PUT", Config.APIUrl+"/player/pause", nil)
 	client := &http.Client{}
@@ -411,7 +423,7 @@ func restore() {
 	}
 
 	// store player info to .queue.storedPos file
-	success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ShuffleMode)
+	success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ItemProgressMS, player.ShuffleMode, player.MediaKind)
 	if err != nil {
 		fatalMsg(err.Error())
 	}
