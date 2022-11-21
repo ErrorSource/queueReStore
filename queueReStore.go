@@ -111,10 +111,10 @@ func outputMsg(msg string) {
 }
 func fatalMsg(msg string) {
 	if (quiet == false) {
-		fmt.Println(msg)
+		fmt.Println("FATAL: "+msg+"! Aborting...")
 	}
 	// always output to log file
-	writeToLog(msg, true)
+	writeToLog("FATAL: "+msg+"! Aborting...", true)
 }
 
 func writeToLog(msg string, fatal bool) {
@@ -127,7 +127,7 @@ func writeToLog(msg string, fatal bool) {
 
 	log.SetOutput(lgFl)
 	if (fatal == true) {
-		log.Fatalln("FATAL: "+msg+" Aborting...")
+		log.Fatalln(msg)
 	} else {
 		log.Println(msg)
 	}
@@ -247,7 +247,7 @@ func readActPosFile() (*playerInfo, error) {
 	// read actPos file
 	actPosFile, err := ioutil.ReadFile(Config.ActPosTrgt)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Cannot read actPost-file: %s", Config.ActPosTrgt))
+		return nil, errors.New(fmt.Sprintf("Cannot read actPost-file: %s (restore without store?)", Config.ActPosTrgt))
 	}
 
 	// parse []byte to the go struct pointer
