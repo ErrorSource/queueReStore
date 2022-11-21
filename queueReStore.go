@@ -308,6 +308,8 @@ func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, seekPos int, shfflMo
 		client := &http.Client{}
 		if _, err := client.Do(pauseReq); err != nil {
 			outputMsg("WARNING: Cannot send 'play to seek-position' command to owntone after stored playlist (audiobook) loaded! Continuing anyway...")
+		} else {
+			outputMsg(fmt.Sprintf("Audiobook! Jumping to seek-position %v (ms)", seekPos))
 		}
 	}
 	//curl -X PUT "http://localhost:3689/api/player/seek?position_ms=2000"
