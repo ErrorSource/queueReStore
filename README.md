@@ -9,6 +9,8 @@ Useful, if you use OwnTone combined with shairport-sync (piped output). Queue wo
 Usage of ./queueReStore:
   -mode string
         [store|restore] queue
+  -quiet
+        write all output to log file only
   -version
         show version and exit
 
