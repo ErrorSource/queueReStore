@@ -24,9 +24,11 @@ const AppVersion = "1.0.0"
 
 var quiet bool
 
+// structures -----------------------------------------------------------------
 var Config config
 // queue item structure
 type config struct {
+	LogFile    string `yaml:"logFile"`
 	APIUrl     string `yaml:"otAPIUrl"`
 	OTUid      int    `yaml:"otUid"`
 	OTGid      int    `yaml:"otGid"`
@@ -77,18 +79,57 @@ type plsObj struct {
 	Total  int `json:"total"`
 	Items  []plsItem `json:"items"`
 }
+// end structures -------------------------------------------------------------
 
+// helper functions -----------------------------------------------------------
 func readConfig() {
 	configData, err := ioutil.ReadFile("/etc/queueReStore.yml")
 	if err != nil {
-		fmt.Println("Can not read config-file!")
+		if (quiet == false) {
+			fmt.Println("FATAL: Cannot read config-file! Aborting...")
+		}
 		log.Fatalln(err)
 	}
 
 	// parse []byte directly to the global variable 'Config'
 	if err := yaml.Unmarshal(configData, &Config); err != nil {
-		fmt.Println("Can not unmarshal config YAML!")
+		if (quiet == false) {
+			fmt.Println("FATAL: Cannot unmarshal config YAML! Aborting...")
+		}
 		log.Fatalln(err)
+	}
+}
+
+// depending on switch -quiet output to stdout and/or log (stderr)
+// (difference fmt and log: fmt prints to stdout, log prints to stderr)
+func outputMsg(msg string) {
+	if (quiet == false) {
+		fmt.Println(msg)
+	}
+	// always output to log file
+	writeToLog(msg, false)
+}
+func fatalMsg(msg string) {
+	if (quiet == false) {
+		fmt.Println(msg)
+	}
+	// always output to log file
+	writeToLog(msg, true)
+}
+
+func writeToLog(msg string, fatal bool) {
+	// if log file does not exists, create it; other wise append
+	lgFl, err := os.OpenFile(Config.LogFile, os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Error opening log file: %v", err)
+	}
+	defer lgFl.Close()
+
+	log.SetOutput(lgFl)
+	if (fatal == true) {
+		log.Fatalln("FATAL: "+msg+" Aborting...")
+	} else {
+		log.Println(msg)
 	}
 }
 
@@ -118,7 +159,7 @@ func convertToQueueStruct(jsonData []byte) ([]queueItem, error) {
 	// parse []byte to the go struct pointer
 	var jsonObj queueObj
 	if err := json.Unmarshal(jsonData, &jsonObj); err != nil {
-		return nil, errors.New("Can not unmarshal JSON!")
+		return nil, errors.New("Cannot unmarshal JSON!")
 	}
 	
 	for _, item := range jsonObj.Items {
@@ -140,7 +181,7 @@ func writePlsFile(queueItems []queueItem) (bool, error) {
 	// tracks
 	for _, item := range queueItems {
 		// abort immediately, if FilePath is shairport-sync pipe path
-		if (item.FilePath == Config.SPPipePath) {
+		if (Config.SPPipePath != "" && item.FilePath == Config.SPPipePath) {
 			return false, errors.New("shairport-sync Playlist detected! Won't store! Aborting...")
 		}
 		// track info
@@ -153,11 +194,11 @@ func writePlsFile(queueItems []queueItem) (bool, error) {
 
 	// write queue-content to file
 	if err := os.WriteFile(Config.PlsTarget, []byte(plsContent), 0644); err != nil {
-		return false, errors.New("Can not write m3u-file!")
+		return false, errors.New(fmt.Sprintf("Cannot write playlist file: %s!", Config.PlsTarget))
 	}
 	// set ownership to owntone:audio
 	if err := os.Chown(Config.PlsTarget, Config.OTUid, Config.OTGid); err != nil {
-		return false, errors.New("Can not set ownership of m3u-file!")
+		return false, errors.New(fmt.Sprintf("Cannot set ownership of playlist file!", Config.PlsTarget))
 	}
 
 	return true, nil
@@ -169,7 +210,7 @@ func convertToPlayerStruct(jsonData []byte, queueItems []queueItem) (*playerInfo
 	// parse []byte to the go struct pointer
 	var jsonObj playerInfo
 	if err := json.Unmarshal(jsonData, &jsonObj); err != nil {
-		return nil, errors.New("Can not unmarshal JSON!")
+		return nil, errors.New("Cannot unmarshal player info JSON!")
 	}
 
 	// search for item in queue
@@ -191,14 +232,12 @@ func writeActPosFile(player *playerInfo) (bool, error) {
  
 	// write player info content to file
 	if err := ioutil.WriteFile(Config.ActPosTrgt, actPosFileString, 0644); err != nil {
-		fmt.Println("Can not write actPos-file!")
-		fmt.Println(Config.APIUrl)
-		log.Fatalln(err)
+		return false, errors.New(fmt.Sprintf("Cannot write actPos-file: %s", Config.ActPosTrgt))
 	}
 
 	// set ownership to owntone:audio
 	if err := os.Chown(Config.ActPosTrgt, Config.OTUid, Config.OTGid); err != nil {
-		return false, errors.New("Can not set ownership of actPos-file!")
+		return false, errors.New(fmt.Sprintf("Cannot set ownership of actPos-file: %s", Config.ActPosTrgt))
 	}
 
 	return true, nil
@@ -208,24 +247,24 @@ func readActPosFile() (*playerInfo, error) {
 	// read actPos file
 	actPosFile, err := ioutil.ReadFile(Config.ActPosTrgt)
 	if err != nil {
-		return nil, errors.New("Can not read actPost-file!")
+		return nil, errors.New(fmt.Sprintf("Cannot read actPost-file: %s", Config.ActPosTrgt))
 	}
 
 	// parse []byte to the go struct pointer
 	var jsonObj playerInfo
 	if err := json.Unmarshal([]byte(actPosFile), &jsonObj); err != nil {
-		return nil, errors.New("Can not unmarshal JSON!")
+		return nil, errors.New("Cannot unmarshal actual position JSON!")
 	}
 	
 	return &jsonObj, nil
 }
 
 // convert downloaded data bytes (json) to list of playlist items
-func getOnwPlaylistUri(jsonData []byte) (string, error) {
+func getOwnPlaylistUri(jsonData []byte) (string, error) {
 	// parse []byte to the go struct pointer
 	var jsonObj plsObj
 	if err := json.Unmarshal(jsonData, &jsonObj); err != nil {
-		return "", errors.New("Can not unmarshal JSON!")
+		return "", errors.New("Cannot unmarshal available playlists JSON!")
 	}
 	
 	var ownPlsUri string
@@ -257,18 +296,19 @@ func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, shfflMode bool) (boo
 		"playback_from_position": { fmt.Sprintf("%v", (trgtPos - 1)) },
 	}
 	if _, err := http.PostForm(loadReq, postData); err != nil {
-		return false, errors.New("Can not load stored playlist!")
+		return false, errors.New("Cannot let owntone to load stored playlist (via POST)!")
 	}
 
 	// immediately send pause command
 	pauseReq, _ := http.NewRequest("PUT", Config.APIUrl+"/player/pause", nil)
 	client := &http.Client{}
 	if _, err := client.Do(pauseReq); err != nil {
-		fmt.Println("Can send 'pause' after stored playlist loaded! Continuing anyway...")
+		outputMsg("WARNING: Cannot send 'pause' command to owntone after stored playlist loaded! Continuing anyway...")
 	}
 
 	return true, nil
 }
+// end helper functions -------------------------------------------------------
 
 
 func main() {
@@ -283,121 +323,123 @@ func main() {
 		os.Exit(0)
 	}
 
-	//if len(flag.Args()) < 1 {
-	if (mode == "" || (mode != "store" && mode != "restore")) {
-		flag.Usage()
-		log.Fatalln("-mode must be set to [store|restore]!")
-	}
-
 	// read config from file '/etc/queueReStore.yml'
 	readConfig()
 
+	//if len(flag.Args()) < 1 {
+	if (mode == "" || (mode != "store" && mode != "restore")) {
+		if (quiet == false) {
+			flag.Usage()
+		}
+		fatalMsg("-mode must be set to [store|restore]!")
+	}
+
 	if (mode == "store") {
-		//data, err := makeRequest(flag.Args()[len(flag.Args())-1])
-		data, err := makeRequest(Config.APIUrl+"/queue")
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		queue, err := convertToQueueStruct(data)
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		success, err := writePlsFile(queue)
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		if (success == true) {
-			if (quiet == false) {
-				fmt.Println(fmt.Sprintf("ownTone-queue successfully written to:\n    '%s'", Config.PlsTarget))
-			}
-		} else {
-			fmt.Println("Something went wrong!\n")
-			os.Exit(1)
-		}
-
-		// get actual player info
-		data, err = makeRequest(Config.APIUrl+"/player")
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		// covert data to struct
-		player, err := convertToPlayerStruct(data, queue)
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		// store player info to .queue.storedPos file
-		success, err = writeActPosFile(player)
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		if (success == true) {
-			if (quiet == false) {
-				fmt.Println(fmt.Sprintf("ownTones actual queue position stored to:\n    '%s'\n", Config.ActPosTrgt))
-				fmt.Println("Success!\n")
-			}
-		} else {
-			fmt.Println("Something went wrong!")
-			os.Exit(1)
-		}
+		store()
 	}
 
 	if (mode == "restore") {
-		// read
-		player, err := readActPosFile()
-		if err != nil {
-			log.Fatalln(err)
-		}
+		restore()
+	}
+}
 
-		data, err := makeRequest(Config.APIUrl+"/library/playlists")
-		if err != nil {
-			log.Fatalln(err)
-		}
-		
-		ownPlsUri, err := getOnwPlaylistUri(data)
-		if err != nil {
-			log.Fatalln(err)
-		}
+func store() {
+	//data, err := makeRequest(flag.Args()[len(flag.Args())-1])
+	data, err := makeRequest(Config.APIUrl+"/queue")
+	if err != nil {
+		fatalMsg(err.Error())
+	}
 
-		// store player info to .queue.storedPos file
-		success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ShuffleMode)
-		if err != nil {
-			log.Fatalln(err)
-		}
+	queue, err := convertToQueueStruct(data)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
 
-		// delete plsTargetPath file
-		if _, err := os.Stat(Config.PlsTarget); err == nil {
-			if err := os.Remove(Config.PlsTarget); err != nil {
-				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", Config.PlsTarget))
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			// path does *not* exist
-			fmt.Println(fmt.Sprintf("Playlist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
-		}
+	success, err := writePlsFile(queue)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
 
-		// delete actPosTargetPath file
-		if _, err := os.Stat(Config.ActPosTrgt); err == nil {
-			if err := os.Remove(Config.ActPosTrgt); err != nil {
-				fmt.Println(fmt.Sprintf("Can not delete file '%s'! Continuing anyway...", Config.ActPosTrgt))
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			// path does *not* exist
-			fmt.Println(fmt.Sprintf("Actual position file '%s' does not exists! Continuing anyway...", Config.ActPosTrgt))
-		}
+	if (success == true) {
+		outputMsg("ownTone-queue successfully written!")
+	} else {
+		fatalMsg("Something went wrong!")
+		os.Exit(1) // to be sure ;o)
+	}
 
-		if (success == true) {
-			if (quiet == false) {
-				fmt.Println(fmt.Sprintf("Restored playlist and jumped to track num: '%s'\n", fmt.Sprintf("%v", player.Position)))
-				fmt.Println("Success!\n")
-			}
-		} else {
-			fmt.Println("Something went wrong!")
-			os.Exit(1)
+	// get actual player info
+	data, err = makeRequest(Config.APIUrl+"/player")
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	// covert data to struct
+	player, err := convertToPlayerStruct(data, queue)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	// store player info to .queueStoredPos file
+	success, err = writeActPosFile(player)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	if (success == true) {
+		outputMsg("Success! ownTones actual queue position stored!")
+	} else {
+		fatalMsg("Something went wrong!")
+		os.Exit(1) // to be sure ;o)
+	}
+}
+
+func restore() {
+	// read
+	player, err := readActPosFile()
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	data, err := makeRequest(Config.APIUrl+"/library/playlists")
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+	
+	ownPlsUri, err := getOwnPlaylistUri(data)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	// store player info to .queue.storedPos file
+	success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ShuffleMode)
+	if err != nil {
+		fatalMsg(err.Error())
+	}
+
+	// delete plsTargetPath file
+	if _, err := os.Stat(Config.PlsTarget); err == nil {
+		if err := os.Remove(Config.PlsTarget); err != nil {
+			outputMsg(fmt.Sprintf("WARNING: Cannot delete file '%s'! Continuing anyway...", Config.PlsTarget))
 		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		// path does *not* exist
+		outputMsg(fmt.Sprintf("WARNING: laylist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
+	}
+
+	// delete actPosTargetPath file
+	if _, err := os.Stat(Config.ActPosTrgt); err == nil {
+		if err := os.Remove(Config.ActPosTrgt); err != nil {
+			outputMsg(fmt.Sprintf("WARNING: Cannot delete file '%s'! Continuing anyway...", Config.ActPosTrgt))
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		// path does *not* exist
+		outputMsg(fmt.Sprintf("WARNING: Actual position file '%s' does not exists! Continuing anyway...", Config.ActPosTrgt))
+	}
+
+	if (success == true) {
+		outputMsg(fmt.Sprintf("Success! Restored playlist and jumped to track num: '%s'!", fmt.Sprintf("%v", player.Position)))
+	} else {
+		fatalMsg("Something went wrong!")
+		os.Exit(1) // to be sure ;o)
 	}
 }
