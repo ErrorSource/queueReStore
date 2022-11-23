@@ -45,6 +45,7 @@ type queueItem struct {
 	Artist    string `json:"artist"`
 	Title     string `json:"title"`
 	MediaKind string `json:"media_kind"`
+	DataKind  string `json:"data_kind"`
 	FilePath  string `json:"path"`
 	Uri       string `json:"uri"`
 }
@@ -183,7 +184,7 @@ func writePlsFile(queueItems []queueItem) (bool, error) {
 	// tracks
 	for _, item := range queueItems {
 		// abort immediately, if FilePath is shairport-sync pipe path
-		if (Config.SPPipePath != "" && item.FilePath == Config.SPPipePath) {
+		if (item.MediaKind == "pipe" || (Config.SPPipePath != "" && item.FilePath == Config.SPPipePath)) {
 			return false, errors.New("shairport-sync Playlist detected! Won't store! Aborting...")
 		}
 		// track info
