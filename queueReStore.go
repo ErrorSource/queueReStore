@@ -1,16 +1,16 @@
 package main
 
 import (
-	"os"
 	"encoding/json"
-	"gopkg/yaml"
 	"errors"
 	"flag"
 	"fmt"
+	"gopkg/yaml"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	// "os/exec"
 )
@@ -69,6 +69,7 @@ type playerInfo struct {
 	TrackId        int    
 	MediaKind      string
 	Uri            string ""
+	QueueTrackIds  []int
 }
 
 // playlist structure
@@ -228,6 +229,11 @@ func convertToPlayerStruct(jsonData []byte, queueItems []queueItem) (*playerInfo
 		}
 	}
 
+	// gather all trackIds from queue and store them as well
+	for _, item := range queueItems {
+		jsonObj.QueueTrackIds = append(jsonObj.QueueTrackIds, item.TrackId)
+	}
+
 	return &jsonObj, nil
 }
 
@@ -323,6 +329,18 @@ func loadPlayistAndPosition(trgtPlsUri string, trgtPos int, seekPos int, shfflMo
 
 	return true, nil
 }
+
+func createTrackListUri(qTrackIds[]int) (string, error) {
+	// create concated API-string ("library:track:5610,library:track:5627,...")
+	var trackListUri string
+	for _, trackId := range qTrackIds {
+		trackListUri += fmt.Sprintf("library:track:%d,", trackId)
+	}
+	// remove last comma from string
+	trackListUri = trackListUri[:len(trackListUri) - 1]
+
+	return trackListUri, nil
+}
 // end helper functions -------------------------------------------------------
 
 
@@ -409,6 +427,8 @@ func store() {
 }
 
 func restore() {
+	var success = false
+	
 	// read
 	player, err := readActPosFile()
 	if err != nil {
@@ -422,13 +442,22 @@ func restore() {
 	
 	ownPlsUri, err := getOwnPlaylistUri(data)
 	if err != nil {
-		fatalMsg(err.Error())
-	}
+		outputMsg("WARNING: _queueReStore-playlist was not found in ownTones database! Try to load playlist by adding tracks manually by id...")
 
-	// store player info to .queue.storedPos file
-	success, err := loadPlayistAndPosition(ownPlsUri, player.Position, player.ItemProgressMS, player.ShuffleMode, player.MediaKind)
-	if err != nil {
-		fatalMsg(err.Error())
+		// try to load the playlist-data (push it into new queue) via ownTone-API,
+		// if the queue-file "_queueReStore.m3u" exists, but not scanned by ownTone
+		trackListUri, err := createTrackListUri(player.QueueTrackIds)
+
+		success, err = loadPlayistAndPosition(trackListUri, player.Position, player.ItemProgressMS, player.ShuffleMode, player.MediaKind)
+		if err != nil {
+			fatalMsg(err.Error())
+		}
+	} else {
+		// load the playlist "_queueReStore.m3u" and jump to stored position
+		success, err = loadPlayistAndPosition(ownPlsUri, player.Position, player.ItemProgressMS, player.ShuffleMode, player.MediaKind)
+		if err != nil {
+			fatalMsg(err.Error())
+		}
 	}
 
 	// delete plsTargetPath file
@@ -438,7 +467,7 @@ func restore() {
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		// path does *not* exist
-		outputMsg(fmt.Sprintf("WARNING: laylist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
+		outputMsg(fmt.Sprintf("WARNING: playlist file '%s' does not exists! Continuing anyway...", Config.PlsTarget))
 	}
 
 	// delete actPosTargetPath file
